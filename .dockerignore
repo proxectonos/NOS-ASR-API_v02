@@ -1,0 +1,7 @@
+models/
+*.wav
+*.mp3
+*.flac
+chunks/
+outputs/
+*.zip
