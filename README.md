@@ -23,9 +23,7 @@ mkdir -p models
 
 Models are pulled automatically from Hugging Face the first time the server starts. The Hugging Face cache is rooted under `models/<model_id>/` or under the directory pointed to by `MODELS_ROOT`. Subsequent starts can reuse the local cache.
 
-You can find the Proxecto Nós models on Hugging Face:
-
-- <https://huggingface.co/collections/proxectonos/asr-models>
+You can find the Proxecto Nós models on Hugging Face: <https://huggingface.co/collections/proxectonos/asr-models>
 
 For private or gated repositories, set `HF_TOKEN` in the environment before starting the API.
 
