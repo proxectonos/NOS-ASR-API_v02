@@ -25,7 +25,6 @@ Models are pulled automatically from Hugging Face the first time the server star
 
 You can find the Proxecto Nós models on Hugging Face:
 
-- <https://huggingface.co/proxectonos>
 - <https://huggingface.co/collections/proxectonos/asr-models>
 
 For private or gated repositories, set `HF_TOKEN` in the environment before starting the API.
