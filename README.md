@@ -53,7 +53,6 @@ The following model entries are intended for the current API configuration.
 | `whisper_large_v3_turbo_gl_v1` | `proxectonos/whisper-large-v3-turbo-gl-v1.0` | `whisper` | Whisper Large-v3-Turbo fine-tuned for Galician ASR. Recommended on GPU; short files can be tested on CPU. |
 | `w2v_bert_2_gl` | `proxectonos/w2v-bert-2.0-gl` | `wav2vec2_bert` | W2V-BERT CTC. |
 
-The lightweight API profile focuses on CTC and Whisper ASR backends. Multimodal generative ASR models such as Phi-4 require a separate backend profile with prompt handling, `trust_remote_code`, higher memory requirements and preferably GPU inference.
 
 ## Configuration
 
