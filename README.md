@@ -2,399 +2,575 @@
 
 Dockerized HTTP API for Galician Automatic Speech Recognition.
 
-Wraps the [`proxectonos/Nos_ASR-wav2vec2-large-xlsr-53-gl-with-lm`](https://huggingface.co/proxectonos/Nos_ASR-wav2vec2-large-xlsr-53-gl-with-lm) model from [Proxecto Nós](https://nos.gal/gl/proxecto-nos) with a small Flask + Gunicorn server.
+The API serves Galician ASR models from [Proxecto Nós](https://nos.gal/gl/proxecto-nos) through a small Flask + Gunicorn server. Models are configured in `config.json` and selected at request time with `model_id` or, when omitted, through the default model for a language.
+
+The API supports the following backend families:
+
+- `wav2vec2_lm`: Wav2Vec2 CTC with a KenLM decoder.
+- `wav2vec2`: Wav2Vec2 CTC with greedy decoding.
+- `whisper`: Whisper encoder-decoder ASR through the Transformers ASR pipeline.
+- `wav2vec2_bert`: W2V-BERT CTC through `AutoProcessor` and `AutoModelForCTC`.
 
 ## Setup
 
 Start by cloning this repository and creating your `models` directory:
-```
+
+```bash
 git clone <this-repo-url> NOS-ASR-API
 cd NOS-ASR-API
 mkdir -p models
 ```
 
-Models are pulled automatically from Hugging Face the first time the server starts. The download is cached under `models/<model_id>/`, so the second boot is offline. You can find the Proxecto Nós ASR models on Hugging Face: <https://huggingface.co/proxectonos>.
+Models are pulled automatically from Hugging Face the first time the server starts. The Hugging Face cache is rooted under `models/<model_id>/` or under the directory pointed to by `MODELS_ROOT`. Subsequent starts can reuse the local cache.
 
-If you prefer to pre-download the weights instead of waiting for the cold start, run:
+You can find the Proxecto Nós models on Hugging Face:
 
-```
-python -c "
-from transformers import Wav2Vec2ProcessorWithLM, Wav2Vec2ForCTC
-repo = 'proxectonos/Nos_ASR-wav2vec2-large-xlsr-53-gl-with-lm'
-Wav2Vec2ProcessorWithLM.from_pretrained(repo, cache_dir='models/nos_asr_gl')
-Wav2Vec2ForCTC.from_pretrained(repo, cache_dir='models/nos_asr_gl')
-"
-```
+- <https://huggingface.co/proxectonos>
+- <https://huggingface.co/collections/proxectonos/asr-models>
 
-After the first run, the layout looks like this:
+For private or gated repositories, set `HF_TOKEN` in the environment before starting the API.
 
-```
-NOS-ASR-API/
-├── models/
-│   └── nos_asr_gl/
-│       └── ... (Hugging Face snapshot: model weights, processor, KenLM .bin)
-├── config.json
-└── ... (other project files)
+```bash
+export HF_TOKEN=hf_xxxxxxxxxxxxxxxxx
 ```
 
-Once your environment is in place, you must define the models to serve in the `config.json` file (located in the project's root). This file instructs the API on which models to load and what settings to use for each.
+On Docker Compose, this can be passed through the `environment` section or an `.env` file.
 
-### Available models
+## Available model types
 
-Proxecto Nós currently publishes two Galician ASR checkpoints on Hugging Face:
+| `model_type` | Backend | Decoder | Typical use |
+|---|---|---|---|
+| `wav2vec2_lm` | `Wav2Vec2ForCTC` | KenLM-rescored CTC | More fluent output when RAM/disk budget is available |
+| `wav2vec2` | `Wav2Vec2ForCTC` | Greedy CTC | Lighter CPU-friendly deployment and testing |
+| `whisper` | Transformers `pipeline("automatic-speech-recognition")` | Encoder-decoder generation | Whisper ASR models, especially on GPU |
+| `wav2vec2_bert` | `AutoModelForCTC` | Greedy CTC | W2V-BERT CTC checkpoints exported in standard Transformers format |
 
-| `model_id` (suggested)   | `hf_repo`                                                          | `model_type`     | Notes                                                                                          |
-|--------------------------|--------------------------------------------------------------------|------------------|------------------------------------------------------------------------------------------------|
-| `nos_asr_gl`             | `proxectonos/Nos_ASR-wav2vec2-large-xlsr-53-gl-with-lm`            | `wav2vec2_lm`    | Wav2Vec2 XLSR-53 (large) + bundled KenLM 4-gram (`wiki-gl.arpa.bin`). Heavier (~1.5 GB on disk). |
-| `nos_asr_gl_300m`        | `proxectonos/Nos_ASR-wav2vec2-xls-r-300m-gl`                       | `wav2vec2`       | Wav2Vec2 XLS-R 300m, greedy CTC (no LM). Lighter, trained on Common Voice 17, FalAI, FLEURS, Parlaspeech-GL, OpenSLR. |
+## Proxecto Nós ASR models
 
-Pick `wav2vec2_lm` when you want LM-rescored output (more fluent Galician) and have RAM and disk budget. Pick `wav2vec2` when you want a smaller, faster model and are OK with raw CTC output.
+The following model entries are intended for the current API configuration.
 
-### `config.json` examples
+| `model_id` | `hf_repo` | `model_type` | Notes |
+|---|---|---|---|
+| `nos_asr_gl` | `proxectonos/Nos_ASR-wav2vec2-large-xlsr-53-gl-with-lm` | `wav2vec2_lm` | Wav2Vec2 XLSR-53 large with bundled KenLM language model. Heavier, but LM-rescored. |
+| `nos_asr_gl_300m` | `proxectonos/Nos_ASR-wav2vec2-xls-r-300m-gl` | `wav2vec2` | Wav2Vec2 XLS-R 300M, greedy CTC. Lighter and suitable for local CPU tests. |
+| `whisper_large_v3_turbo_gl_v1` | `proxectonos/whisper-large-v3-turbo-gl-v1.0` | `whisper` | Whisper Large-v3-Turbo fine-tuned for Galician ASR. Recommended on GPU; short files can be tested on CPU. |
+| `w2v_bert_2_gl` | `proxectonos/w2v-bert-2.0-gl` | `wav2vec2_bert` | W2V-BERT CTC. |
 
-**Single model — XLSR-53 with KenLM language model** (the default this repo ships with):
+The lightweight API profile focuses on CTC and Whisper ASR backends. Multimodal generative ASR models such as Phi-4 require a separate backend profile with prompt handling, `trust_remote_code`, higher memory requirements and preferably GPU inference.
 
-```
+## Configuration
+
+The API reads its model registry from `config.json` by default. You can override the path with `ASR_API_CONFIG`.
+
+Only models with `"load": true` are loaded at server startup and can be selected by `model_id`. Models with `"load": false` are documented in the registry but are not available until they are activated and the server is restarted.
+
+The `default` flag controls which model is used when the request specifies only `?lang=gl`.
+
+### Example: all supported entries, one model loaded
+
+This configuration declares the supported ASR entries but loads only the lighter Wav2Vec2 model at startup.
+
+```json
 {
-    "languages": {"gl": "Galician"},
-    "models": [
-        {
-            "model_id": "nos_asr_gl",
-            "lang": "gl",
-            "model_type": "wav2vec2_lm",
-            "hf_repo": "proxectonos/Nos_ASR-wav2vec2-large-xlsr-53-gl-with-lm",
-            "sampling_rate": 16000,
-            "load": true,
-            "default": true
-        }
-    ]
+  "languages": {
+    "gl": "Galician"
+  },
+  "models": [
+    {
+      "model_id": "nos_asr_gl",
+      "lang": "gl",
+      "model_type": "wav2vec2_lm",
+      "hf_repo": "proxectonos/Nos_ASR-wav2vec2-large-xlsr-53-gl-with-lm",
+      "sampling_rate": 16000,
+      "load": false,
+      "default": false
+    },
+    {
+      "model_id": "nos_asr_gl_300m",
+      "lang": "gl",
+      "model_type": "wav2vec2",
+      "hf_repo": "proxectonos/Nos_ASR-wav2vec2-xls-r-300m-gl",
+      "sampling_rate": 16000,
+      "load": true,
+      "default": true
+    },
+    {
+      "model_id": "whisper_large_v3_turbo_gl_v1",
+      "lang": "gl",
+      "model_type": "whisper",
+      "hf_repo": "proxectonos/whisper-large-v3-turbo-gl-v1.0",
+      "sampling_rate": 16000,
+      "load": false,
+      "default": false,
+      "options": {
+        "language": "gl",
+        "task": "transcribe",
+        "chunk_length_s": 15,
+        "stride_length_s": 2,
+        "batch_size": 1,
+        "max_new_tokens": 96,
+        "return_timestamps": false
+      }
+    },
+    {
+      "model_id": "w2v_bert_2_gl",
+      "lang": "gl",
+      "model_type": "wav2vec2_bert",
+      "hf_repo": "proxectonos/w2v-bert-2.0-gl",
+      "sampling_rate": 16000,
+      "load": false,
+      "default": false
+    }
+  ]
 }
 ```
 
-**Single model — XLS-R 300m without LM** (lighter, greedy CTC):
+### Example: Whisper as the active model
 
-```
+```json
 {
-    "languages": {"gl": "Galician"},
-    "models": [
-        {
-            "model_id": "nos_asr_gl_300m",
-            "lang": "gl",
-            "model_type": "wav2vec2",
-            "hf_repo": "proxectonos/Nos_ASR-wav2vec2-xls-r-300m-gl",
-            "sampling_rate": 16000,
-            "load": true,
-            "default": true
-        }
-    ]
+  "languages": {
+    "gl": "Galician"
+  },
+  "models": [
+    {
+      "model_id": "whisper_large_v3_turbo_gl_v1",
+      "lang": "gl",
+      "model_type": "whisper",
+      "hf_repo": "proxectonos/whisper-large-v3-turbo-gl-v1.0",
+      "sampling_rate": 16000,
+      "load": true,
+      "default": true,
+      "options": {
+        "language": "gl",
+        "task": "transcribe",
+        "chunk_length_s": 15,
+        "stride_length_s": 2,
+        "batch_size": 1,
+        "max_new_tokens": 96,
+        "return_timestamps": false
+      }
+    }
+  ]
 }
 ```
 
-**Both models loaded side by side** (pick at request time via the `model_id` query parameter; the `default: true` flag wins for plain `?lang=gl` calls):
+### Example: Wav2Vec2 with KenLM as the default model
 
-```
+```json
 {
-    "languages": {"gl": "Galician"},
-    "models": [
-        {
-            "model_id": "nos_asr_gl",
-            "lang": "gl",
-            "model_type": "wav2vec2_lm",
-            "hf_repo": "proxectonos/Nos_ASR-wav2vec2-large-xlsr-53-gl-with-lm",
-            "sampling_rate": 16000,
-            "load": true,
-            "default": true
-        },
-        {
-            "model_id": "nos_asr_gl_300m",
-            "lang": "gl",
-            "model_type": "wav2vec2",
-            "hf_repo": "proxectonos/Nos_ASR-wav2vec2-xls-r-300m-gl",
-            "sampling_rate": 16000,
-            "load": true
-        }
-    ]
+  "languages": {
+    "gl": "Galician"
+  },
+  "models": [
+    {
+      "model_id": "nos_asr_gl",
+      "lang": "gl",
+      "model_type": "wav2vec2_lm",
+      "hf_repo": "proxectonos/Nos_ASR-wav2vec2-large-xlsr-53-gl-with-lm",
+      "sampling_rate": 16000,
+      "load": true,
+      "default": true
+    }
+  ]
 }
 ```
 
-> Loading both models at once roughly doubles the memory footprint of the worker. On a CPU-only host with <6 GB RAM, prefer toggling `load` per deploy instead.
+### Configuration fields
 
-### Configuration Fields
+Top-level fields:
 
-* `languages`: A dictionary mapping language codes (e.g., `"gl"`) to their full names (e.g., `"Galician"`).
+- `languages`: Dictionary mapping language codes to language names.
+- `models`: List of ASR model entries.
 
-* `models`: A list where each object defines an ASR model to be loaded.
+Model entry fields:
 
-    + `model_id`: The public-facing identifier for this model (e.g., `"nos_asr_gl"`). Used as the `model_id` parameter in API calls and as the cache subdirectory under `models/`.
-    + `lang`: The language code for this model. It must match a key in the `languages` dictionary.
-    + `model_type`: The internal identifier for the ASR system. Use `"wav2vec2_lm"` for a Wav2Vec2 checkpoint with a KenLM decoder, or `"wav2vec2"` for greedy CTC decoding without LM.
-    + `hf_repo`: The Hugging Face repository the weights and processor are pulled from (e.g., `"proxectonos/Nos_ASR-..."`).
-    + `sampling_rate`: The sampling rate (Hz) expected by the model. Incoming audio is automatically resampled to this rate.
-    + `load`: Set to `true` to load this model when the API server starts.
-    + `default` *(optional)*: Set to `true` to mark this model as the default for its language. If omitted, the first loaded model for each language becomes the default.
+- `model_id`: Public identifier used in API calls and as the local model cache subdirectory.
+- `lang`: Language code for the model. It must match a key in `languages`.
+- `model_type`: Backend identifier. Supported values are `wav2vec2_lm`, `wav2vec2`, `whisper` and `wav2vec2_bert`.
+- `hf_repo`: Hugging Face repository used to download the model and processor.
+- `sampling_rate`: Sampling rate expected by the model. Incoming audio is converted to this rate.
+- `load`: Set to `true` to load the model at API startup.
+- `default`: Optional. Set to `true` to use this model for requests that provide `?lang=<code>` without `model_id`.
+- `options`: Optional backend-specific options. Currently used by the Whisper backend.
 
-### Paths
+Whisper `options`:
 
-Models are identified by their Hugging Face repository (`hf_repo`) rather than by file paths. The processor and weights are cached locally under `models/<model_id>/` (or whatever directory `MODELS_ROOT` points to). If you ship the cache alongside the project, the server will reuse it instead of downloading again.
+- `language`: Generation language, usually `"gl"`.
+- `task`: Whisper task, usually `"transcribe"`.
+- `chunk_length_s`: Chunk length used by the Transformers ASR pipeline.
+- `stride_length_s`: Overlap between chunks.
+- `batch_size`: Pipeline batch size.
+- `max_new_tokens`: Maximum generated tokens per chunk.
+- `return_timestamps`: Whether the pipeline should request timestamps.
+
+## Model selection
+
+Use `model_id` to select an explicit model:
+
+```bash
+curl -X POST \
+  -F "audio=@sample.wav" \
+  "http://localhost:5051/api/asr?model_id=nos_asr_gl_300m"
+```
+
+Whisper example:
+
+```bash
+curl -X POST \
+  -F "audio=@sample.wav" \
+  "http://localhost:5051/api/asr?model_id=whisper_large_v3_turbo_gl_v1"
+```
+
+Use `lang` to select the default loaded model for a language:
+
+```bash
+curl -X POST \
+  -F "audio=@sample.wav" \
+  "http://localhost:5051/api/asr?lang=gl"
+```
+
+If neither `model_id` nor `lang` is provided, the request is rejected with `400`.
 
 ## Installation
 
-Once you have completed the setup, you can run the server using either Docker (recommended) or a local Python environment.
+The server can be run with Docker Compose or with a local Python environment.
 
-### Run with docker compose (recommended)
+### Run with Docker Compose
 
-This is the simplest and recommended method. It automatically builds the container, handles all dependencies (including the `kenlm` build toolchain and `ffmpeg`), and sets up the environment for you.
+Docker Compose is the recommended option for deployment. It installs the Python dependencies, `ffmpeg` and the native build toolchain required by `kenlm`.
 
-This will take care of all installations for you.
-
-```
-# 1. Build the Docker image
-# (Only needed the first time or when you change the configuration)
+```bash
 docker compose build
-
-# 2. Start the server
 docker compose up
+```
 
-# (Optional) To run the server in the background (detached mode):
+Run in the background:
+
+```bash
 docker compose up -d
+```
 
-# To stop the server:
+Stop the service:
+
+```bash
 docker compose down
 ```
 
+When only `config.json` changes, rebuilding is not necessary if the file is mounted into the container by `docker-compose.yml`; restarting the service is enough:
+
+```bash
+docker compose down
+docker compose up -d
+```
+
+### Docker build context
+
+Keep model caches, audio files and generated chunks out of the Docker build context. A typical `.dockerignore` should include:
+
+```dockerignore
+models/
+models/.hf_cache/
+.hf_cache/
+
+__pycache__/
+*.pyc
+
+.git/
+.venv/
+venv/
+asr/
+
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.webm
+*.mp4
+
+chunks/
+outputs/
+tmp/
+temp/
+
+*.zip
+*.tar
+*.tar.gz
+*.7z
+```
+
+The `models/` directory should be mounted as a volume, for example:
+
+```yaml
+volumes:
+  - ./models:/app/models
+```
+
+This keeps model weights outside the Docker image while making them available to the running container.
+
 ### Run with local installation
 
-This method is for development or if you prefer not to use Docker.
+Native installs need:
 
-Native installs need a working C++ toolchain to build the `kenlm` wheel (`cmake`, a C++ compiler, Boost headers, Eigen, zlib) and `ffmpeg` on `PATH` for audio decoding. The Docker image already provides all of these.
+- Python 3.10 or newer.
+- `ffmpeg` available on `PATH`.
+- A C++ build toolchain for `kenlm` when using `wav2vec2_lm`.
+- The Python dependencies in `requirements.txt`.
 
-```
+System dependencies:
+
+```bash
 # macOS
 brew install cmake boost eigen ffmpeg
 
 # Debian/Ubuntu
-sudo apt-get install build-essential cmake libboost-all-dev libeigen3-dev ffmpeg libsndfile1
+sudo apt-get update
+sudo apt-get install -y build-essential cmake libboost-all-dev libeigen3-dev ffmpeg libsndfile1
 ```
 
-> **macOS (Apple Silicon):** if the `kenlm` build fails to find Boost, point it at the
-> Homebrew prefix before `pip install`: `export BOOST_ROOT="$(brew --prefix boost)"`.
+On macOS with Apple Silicon, if the `kenlm` build fails to find Boost:
+
+```bash
+export BOOST_ROOT="$(brew --prefix boost)"
+```
 
 #### Windows
 
-Native Windows builds of `kenlm` are non-trivial because of the Boost dependency. There are two practical routes:
+The recommended local route on Windows is WSL2 with Ubuntu. Install WSL2, open an Ubuntu shell and follow the Debian/Ubuntu instructions above.
 
-**Option 1 (recommended): WSL2 + Ubuntu.** Install [WSL2](https://learn.microsoft.com/windows/wsl/install), launch an Ubuntu shell, then follow the Debian/Ubuntu instructions above. Everything else (venv, `pip install -r requirements.txt`, `python run.py`) works exactly the same.
+Native Windows builds of `kenlm` require Visual Studio build tools, CMake, ffmpeg and Boost. If you use Chocolatey and vcpkg:
 
-**Option 2: native Windows.** Install the dependencies via your preferred package manager. Examples below use [Chocolatey](https://chocolatey.org/) — adapt to [Scoop](https://scoop.sh/) or [winget](https://learn.microsoft.com/windows/package-manager/winget/) if you prefer.
-
-```
-:: Install build toolchain + ffmpeg
+```bat
 choco install -y visualstudio2022-workload-vctools cmake ffmpeg
 
-:: Boost via vcpkg (kenlm only needs the headers)
 git clone https://github.com/microsoft/vcpkg %USERPROFILE%\vcpkg
 %USERPROFILE%\vcpkg\bootstrap-vcpkg.bat
 %USERPROFILE%\vcpkg\vcpkg install boost-system boost-thread boost-program-options eigen3 zlib
 setx BOOST_ROOT "%USERPROFILE%\vcpkg\installed\x64-windows"
 ```
 
-After installing the dependencies, **open a fresh terminal** so the new `PATH` and `BOOST_ROOT` take effect, then continue with the Python steps below. Gunicorn does not run on Windows, so the launcher (`run.py`, see step 3) automatically uses [Waitress](https://docs.pylonsproject.org/projects/waitress/) instead — `waitress` is installed from `requirements.txt` on Windows only.
+Open a fresh terminal after installing system dependencies.
 
-If `pip install` of `kenlm` fails, the error is almost always Boost not being found — re-check `BOOST_ROOT` and the build tools install.
+#### Python environment
 
-#### 1. (Recommended) Create a Virtual Environment
-
-It is highly recommended to use a Python virtual environment to avoid package conflicts with your other projects.
-
-```
-# Create a new virtual environment named 'asr'
+```bash
 python -m venv asr
 
-# Activate the environment
-# On macOS/Linux:
+# Linux/macOS
 source asr/bin/activate
-# On Windows:
+
+# Windows
 .\asr\Scripts\activate
-```
 
-#### 2. Install Dependencies
-
-Once your environment is active, install the required packages:
-
-```
 pip install -r requirements.txt
 ```
 
-#### 3. Run the Server
+Run through the cross-platform launcher:
 
-You have two ways to run the server:
-
-##### Option A: Cross-platform launcher (recommended)
-
-The `run.py` launcher works the same on Linux, macOS and Windows. It picks the right
-server automatically — `gunicorn` (with `--reload`) on Linux/macOS, `waitress` on
-Windows — and binds to port `5052` so it does not clash with the Docker container.
-
-```
-# Any OS
+```bash
 python run.py
-
-# Or use the convenience wrappers:
-./run_local.sh          # Linux / macOS / WSL
-run_local.bat           # Windows (PowerShell / cmd)
 ```
 
-Settings are controlled via environment variables (with defaults):
+Convenience wrappers:
 
-| Variable         | Default        | Purpose                                    |
-|------------------|----------------|--------------------------------------------|
-| `PORT`           | `5052`         | Port to bind                               |
-| `WEB_THREADS`    | `4`            | Worker threads (use threads for concurrency)|
-| `WEB_WORKERS`    | `1`            | Gunicorn workers (Linux/macOS only)        |
-| `WEB_TIMEOUT`    | `300`          | Request timeout (s) for long-audio inference|
-| `USE_CUDA`       | `0`            | `1` to enable GPU inference                |
-
-Keep `WEB_WORKERS=1`: each worker loads the full model into memory. Scale horizontally
-with replicas, not with workers per replica. The 300 s timeout is needed because
-long-audio inference on CPU can easily exceed the default 30 s.
-
-##### Option B: Manually with Gunicorn (Linux/macOS)
-
-If you want direct control over the settings:
-
+```bash
+./run_local.sh       # Linux / macOS / WSL
+run_local.bat        # Windows
 ```
-# Run the server on port 5051
+
+The local launcher binds to port `5052` by default so it does not clash with Docker Compose on port `5051`.
+
+### Manual Gunicorn launch
+
+On Linux/macOS:
+
+```bash
 gunicorn server:app -b :5051 --workers 1 --threads 4 --timeout 300
-
-# You can change the port to any you like (e.g., :8080)
-gunicorn server:app -b :8080 --workers 1 --threads 4 --timeout 300
 ```
 
-On native Windows, gunicorn is unavailable — use `python run.py` (Option A) or run
-`waitress-serve --listen=*:5051 --threads=4 --channel-timeout=300 server:app` directly.
+For long audio or slow CPU inference, increase the timeout:
 
-### Using the GPU (Inference)
-
-You can enable GPU acceleration for inference when running locally or with Docker. This requires an NVIDIA GPU and having the NVIDIA Container Toolkit installed for the Docker method.
-
-#### Enabling GPU with Docker
-
-Edit your `docker-compose.yml` file to make two changes:
-
-1. Set the `USE_CUDA` environment variable to `1`.
-
-2. Uncomment the `deploy` block to give the container access to your GPU.
-
-Your file should look like this after editing:
-
-```
-...
-    environment:
-      - USE_CUDA=1
-
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1 # Or "all" to use all available GPUs
-              capabilities: [gpu]
-...
-```
-Note: For more details on Docker GPU support, see the [official documentation](https://docs.docker.com/compose/how-tos/gpu-support/).
-
-#### Enabling GPU for a Local Installation
-
-This is controlled by setting the `USE_CUDA` environment variable to `1` before running the server. It works with any launch method:
-
-```
-# Linux / macOS — cross-platform launcher
-USE_CUDA=1 python run.py
-
-# Windows (PowerShell)
-$env:USE_CUDA="1"; python run.py
-
-# Windows (cmd)
-set USE_CUDA=1 && python run.py
-
-# Or manually with gunicorn (Linux/macOS)
-USE_CUDA=1 gunicorn server:app -b :5051 --workers 1 --threads 4 --timeout 300
+```bash
+gunicorn server:app -b :5051 --workers 1 --threads 1 --timeout 3600
 ```
 
-The helper wrappers `run_local.sh` / `run_local.bat` default `USE_CUDA` to `0`; export it to `1` in your shell before running them to override.
+On native Windows, use `python run.py` or Waitress instead of Gunicorn.
+
+## GPU inference
+
+GPU inference requires an NVIDIA GPU and CUDA-compatible PyTorch. Docker GPU access also requires the NVIDIA Container Toolkit.
+
+Set:
+
+```bash
+USE_CUDA=1
+```
+
+For Docker Compose, expose a GPU to the container:
+
+```yaml
+environment:
+  USE_CUDA: "1"
+
+deploy:
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: 1
+          capabilities: [gpu]
+```
+
+Keep `WEB_WORKERS=1`: each worker loads a full copy of each active model. Scale with multiple containers or replicas instead of multiple workers per container.
 
 ## API usage
 
-The primary API endpoint for transcription is `/api/asr`.
+The primary endpoint is:
 
-It accepts **POST** requests with a `multipart/form-data` body and the following fields:
-
-* `audio`: The audio file to transcribe. Supported formats: `wav`, `flac`, `ogg`, `mp3`, `m4a`, `webm`. Audio is automatically converted to mono and resampled to the model's sampling rate (16 kHz by default).
-* `model_id` *(optional)*: The model identifier to use (e.g., `nos_asr_gl`). Must match a `model_id` defined in your `config.json`.
-* `lang` *(optional)*: The language code. If `model_id` is omitted, the API uses the default model for this language.
-
-If neither `model_id` nor `lang` is provided, the request is rejected with `400`.
-
-**Example with `curl`:**
-
-This command transcribes a Galician audio file using the default Galician model and prints the JSON response:
-
-```
-curl -X POST -F "audio=@sample.wav" 'http://localhost:5051/api/asr?lang=gl'
+```text
+POST /api/asr
 ```
 
-> **Port:** examples use `5051` (the Docker-compose mapping). If you run locally with
-> `python run.py` / the wrappers, the default port is `5052` — adjust the URL accordingly
-> (or set `PORT`).
+It accepts `multipart/form-data` with:
 
-Response:
+- `audio`: Audio file to transcribe. Supported formats depend on `ffmpeg`; common formats include `wav`, `flac`, `ogg`, `mp3`, `m4a` and `webm`.
+- `model_id`: Optional query parameter selecting a loaded model.
+- `lang`: Optional query parameter selecting the default loaded model for a language.
 
+Example:
+
+```bash
+curl -X POST \
+  -F "audio=@sample.wav" \
+  "http://localhost:5051/api/asr?model_id=nos_asr_gl_300m"
 ```
+
+Typical response:
+
+```json
 {
-  "model_id": "nos_asr_gl",
+  "model_id": "nos_asr_gl_300m",
+  "model_type": "wav2vec2",
   "lang": "gl",
   "text": "ola mundo",
   "duration_s": 1.42
 }
 ```
 
+The `model_type` field is included when available in the loaded model record.
+
 ### Auxiliary endpoints
 
-| Method | Path                | Description                                              |
-|--------|---------------------|----------------------------------------------------------|
-| GET    | `/`                 | Minimal web UI (upload audio, view result)               |
-| GET    | `/api/asr/models`   | List loaded models grouped by language, with LM status   |
-| GET    | `/api/asr/check`    | Validate a `model_id` / `lang` combination               |
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | Minimal web UI for uploading audio and viewing the transcription |
+| `GET` | `/healthz` | Basic health check |
+| `GET` | `/api/asr/models` | List loaded models grouped by language |
+| `GET` | `/api/asr/check` | Validate a `model_id` or `lang` selection |
 
-### Environment variables
+Examples:
 
-| Variable           | Default              | Purpose                              |
-|--------------------|----------------------|--------------------------------------|
-| `ASR_API_CONFIG`   | `config.json`        | Path to model registry               |
-| `MODELS_ROOT`      | `models`             | Where Hugging Face weights are cached|
-| `USE_CUDA`         | `0`                  | `1` to enable GPU inference          |
-| `MAX_AUDIO_MB`     | `50`                 | Upload size cap                      |
-| `HF_HOME`          | `models/.hf_cache`   | Hugging Face cache directory         |
+```bash
+curl http://localhost:5051/healthz
+curl http://localhost:5051/api/asr/models
+curl "http://localhost:5051/api/asr/check?model_id=nos_asr_gl_300m"
+```
+
+## Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ASR_API_CONFIG` | `config.json` | Path to the model registry |
+| `MODELS_ROOT` | `models` | Root directory for model caches |
+| `HF_HOME` | `models/.hf_cache` | Hugging Face cache directory |
+| `HF_TOKEN` | unset | Hugging Face token for private or gated models |
+| `USE_CUDA` | `0` | Set to `1` to enable CUDA inference |
+| `MAX_AUDIO_MB` | `50` | Upload size limit in megabytes |
+| `PORT` | `5052` for local launcher | Port used by `run.py` |
+| `WEB_WORKERS` | `1` | Gunicorn workers |
+| `WEB_THREADS` | `4` | Gunicorn threads |
+| `WEB_TIMEOUT` | `300` | Request timeout in seconds |
+
+## Long audio
+
+The API accepts one audio file per request and returns the transcription only when the request finishes. It does not stream partial results through the HTTP API or the web UI.
+
+For short and medium-length files, the audio can be submitted directly:
+
+```bash
+curl -X POST \
+  -F "audio=@sample.wav" \
+  "http://localhost:5051/api/asr?model_id=whisper_large_v3_turbo_gl_v1"
+
+For long recordings, especially when using large models or CPU inference, it is often safer to split the audio before submitting it to the API. For example, to create 60-second chunks:
+
+mkdir -p chunks
+ffmpeg -i long_audio.wav -f segment -segment_time 60 -ac 1 -ar 16000 chunks/chunk_%03d.wav
+
+Then process each chunk separately:
+
+curl -X POST \
+  -F "audio=@chunks/chunk_000.wav" \
+  "http://localhost:5051/api/asr?model_id=whisper_large_v3_turbo_gl_v1"
+
+For deployments that need to accept large files, increase both the upload limit and the request timeout:
+
+MAX_AUDIO_MB=500
+WEB_TIMEOUT=3600
+
+Whisper can process audio internally in chunks, but a long recording submitted as a single HTTP request still produces a single response at the end. For production workflows with very long recordings, use external segmentation or implement a dedicated batch-processing endpoint.
 
 ## Demo page
 
-Once the server is running, a simple web-based user interface is available in your browser:
+Once the server is running, a simple web interface is available at:
 
-- Docker compose: [http://localhost:5051](http://localhost:5051)
-- Local (`python run.py` / wrappers): [http://localhost:5052](http://localhost:5052)
+- Docker Compose: <http://localhost:5051>
+- Local launcher: <http://localhost:5052>
 
-This interface allows you to upload an audio file and see the transcription directly from your browser.
+The page allows uploading an audio file and viewing the transcription returned by the API.
 
-**Customization:**
+To customize the page:
 
-To change the styling of the demo page, edit `static/css/style.css`. To swap the layout, edit `templates/index.html`.
+- Edit `static/css/style.css` for styling.
+- Edit `templates/index.html` for layout.
+
+## Troubleshooting
+
+### The API starts but a model is not available
+
+Only models with `"load": true` are loaded at startup. Check:
+
+```bash
+curl http://localhost:5051/api/asr/models
+```
+
+Activate the desired model in `config.json` and restart the service.
+
+### Whisper is slow or fails on long files
+
+On CPU, Whisper is slow and memory-intensive. Use short files for testing and GPU for practical long-form inference. If the worker is killed with a message such as `SIGKILL` or `Perhaps out of memory?`, reduce the file length or move the workload to a GPU server.
+
+### Docker build sends several gigabytes of context
+
+Add or update `.dockerignore` so `models/`, audio files, chunks and archive files are not included in the build context.
+
+### Docker cannot connect to the daemon
+
+Start Docker Desktop or the Docker service, then verify:
+
+```bash
+docker info
+```
+
+On Windows with WSL2, `wsl --shutdown` followed by reopening Docker Desktop often resolves a stale engine state.
 
 ## License
 
-[Apache 2.0.](https://www.apache.org/licenses/LICENSE-2.0)
+[Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0).
 
 ## Acknowledgements
 
-This work is funded by the Ministerio para la Transformación Digital y de la Función Pública - Funded by EU – NextGenerationEU within the framework of the project Desarrollo de Modelos ALIA. (Esta publicación del proyecto Desarrollo de Modelos ALIA está financiada por el Ministerio para la Transformación Digital y de la Función Pública y por el Plan de Recuperación, Transformación y Resiliencia – Financiado por la Unión Europea – NextGenerationEU).
+This work is funded by the Ministerio para la Transformación Digital y de la Función Pública - Funded by EU – NextGenerationEU within the framework of the project Desarrollo de Modelos ALIA. Esta publicación del proyecto Desarrollo de Modelos ALIA está financiada por el Ministerio para la Transformación Digital y de la Función Pública y por el Plan de Recuperación, Transformación y Resiliencia – Financiado por la Unión Europea – NextGenerationEU.
 
 Thanks also to [Dimensiona](https://www.dimensiona.com/gl/sobre-nos/) for the technical development of this API.
