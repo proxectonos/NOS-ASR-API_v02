@@ -9,8 +9,8 @@
       "model_type": "wav2vec2_lm",
       "hf_repo": "proxectonos/Nos_ASR-wav2vec2-large-xlsr-53-gl-with-lm",
       "sampling_rate": 16000,
-      "load": true,
-      "default": true
+      "load": false,
+      "default": false
     },
     {
       "model_id": "nos_asr_gl_300m",
@@ -18,7 +18,7 @@
       "model_type": "wav2vec2",
       "hf_repo": "proxectonos/Nos_ASR-wav2vec2-xls-r-300m-gl",
       "sampling_rate": 16000,
-      "load": true,
+      "load": false,
       "default": false
     },
     {
@@ -28,7 +28,7 @@
       "hf_repo": "proxectonos/whisper-large-v3-turbo-gl-v1.0",
       "sampling_rate": 16000,
       "load": true,
-      "default": false,
+      "default": true,
       "options": {
         "language": "gl",
         "task": "transcribe",
