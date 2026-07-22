@@ -498,22 +498,21 @@ For short and medium-length files, the audio can be submitted directly:
 curl -X POST \
   -F "audio=@sample.wav" \
   "http://localhost:5051/api/asr?model_id=whisper_large_v3_turbo_gl_v1"
+```
 
 For long recordings, especially when using large models or CPU inference, it is often safer to split the audio before submitting it to the API. For example, to create 60-second chunks:
-
-mkdir -p chunks
+```mkdir -p chunks
 ffmpeg -i long_audio.wav -f segment -segment_time 60 -ac 1 -ar 16000 chunks/chunk_%03d.wav
+```
 
 Then process each chunk separately:
-
-curl -X POST \
+```curl -X POST \
   -F "audio=@chunks/chunk_000.wav" \
-  "http://localhost:5051/api/asr?model_id=whisper_large_v3_turbo_gl_v1"
+  "http://localhost:5051/api/asr?model_id=whisper_large_v3_turbo_gl_v1"```
 
 For deployments that need to accept large files, increase both the upload limit and the request timeout:
-
-MAX_AUDIO_MB=500
-WEB_TIMEOUT=3600
+```MAX_AUDIO_MB=500
+WEB_TIMEOUT=3600```
 
 Whisper can process audio internally in chunks, but a long recording submitted as a single HTTP request still produces a single response at the end. For production workflows with very long recordings, use external segmentation or implement a dedicated batch-processing endpoint.
 
