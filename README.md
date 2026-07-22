@@ -510,12 +510,14 @@ Then process each chunk separately:
 
 ```curl -X POST \
   -F "audio=@chunks/chunk_000.wav" \
-  "http://localhost:5051/api/asr?model_id=whisper_large_v3_turbo_gl_v1"```
+  "http://localhost:5051/api/asr?model_id=whisper_large_v3_turbo_gl_v1"
+```
 
 For deployments that need to accept large files, increase both the upload limit and the request timeout:
 
 ```MAX_AUDIO_MB=500
-WEB_TIMEOUT=3600```
+WEB_TIMEOUT=3600
+```
 
 Whisper can process audio internally in chunks, but a long recording submitted as a single HTTP request still produces a single response at the end. For production workflows with very long recordings, use external segmentation or implement a dedicated batch-processing endpoint.
 
