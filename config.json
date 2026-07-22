@@ -1,14 +1,43 @@
 {
-    "languages": {"gl": "Galician"},
-    "models": [
-        {
-            "model_id": "nos_asr_gl",
-            "lang": "gl",
-            "model_type": "wav2vec2_lm",
-            "hf_repo": "proxectonos/Nos_ASR-wav2vec2-large-xlsr-53-gl-with-lm",
-            "sampling_rate": 16000,
-            "load": true,
-            "default": true
-        }
-    ]
+  "languages": {
+    "gl": "Galician"
+  },
+  "models": [
+    {
+      "model_id": "nos_asr_gl",
+      "lang": "gl",
+      "model_type": "wav2vec2_lm",
+      "hf_repo": "proxectonos/Nos_ASR-wav2vec2-large-xlsr-53-gl-with-lm",
+      "sampling_rate": 16000,
+      "load": true,
+      "default": true
+    },
+    {
+      "model_id": "nos_asr_gl_300m",
+      "lang": "gl",
+      "model_type": "wav2vec2",
+      "hf_repo": "proxectonos/Nos_ASR-wav2vec2-xls-r-300m-gl",
+      "sampling_rate": 16000,
+      "load": false,
+      "default": false
+    },
+    {
+      "model_id": "whisper_large_v3_turbo_gl_v1",
+      "lang": "gl",
+      "model_type": "whisper",
+      "hf_repo": "proxectonos/whisper-large-v3-turbo-gl-v1.0",
+      "sampling_rate": 16000,
+      "load": false,
+      "default": false,
+      "options": {
+        "language": "gl",
+        "task": "transcribe",
+        "chunk_length_s": 15,
+        "stride_length_s": 2,
+        "batch_size": 1,
+        "max_new_tokens": 96,
+        "return_timestamps": false
+      }
+    }
+  ]
 }
