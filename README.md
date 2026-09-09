@@ -1,4 +1,4 @@
-# NOS-ASR-API
+# NOS-ASR-API_v02
 
 Multimodel Dockerized HTTP API for Galician ASR with Wav2Vec2, W2V-BERT and Whisper backends.
 
