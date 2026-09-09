@@ -634,4 +634,4 @@ This work is funded by the Ministerio para la Transformación Digital y de la Fu
 
 Esta publicación del proyecto Desarrollo de Modelos ALIA está financiada por el Ministerio para la Transformación Digital y de la Función Pública y por el Plan de Recuperación, Transformación y Resiliencia – Financiado por la Unión Europea – NextGenerationEU.
 
-We would also like to thank [Dimensiona](https://www.dimensiona.com/gl/sobre-nos/) for the technical development of v.0.1 of this API.
+We would also like to thank [Dimensiona](https://www.dimensiona.com/gl/sobre-nos/) for the technical development of v01 of this API.
