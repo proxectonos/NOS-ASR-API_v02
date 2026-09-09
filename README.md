@@ -1,6 +1,6 @@
 # NOS-ASR-API
 
-Dockerized HTTP API for Galician Automatic Speech Recognition.
+Multimodel Dockerized HTTP API for Galician ASR with Wav2Vec2, W2V-BERT and Whisper backends.
 
 The API serves Galician ASR models from [Proxecto Nós](https://nos.gal/gl/proxecto-nos) through a small Flask + Gunicorn server. Models are configured in `config.json` and selected at request time with `model_id` or, when omitted, through the default model for a language.
 
