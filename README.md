@@ -8,7 +8,7 @@ The API currently supports four backend families:
 
 - `wav2vec2_lm`: Wav2Vec2 CTC with a KenLM decoder.
 - `wav2vec2`: Wav2Vec2 CTC with greedy decoding.
-- `wav2vec2_bert`: W2V-BERT CTC with greedy decoding.
+- `w2v_bert`: W2V-BERT CTC with greedy decoding.
 - `whisper`: Whisper encoder-decoder ASR, with optional stride-aware long-audio chunking.
 
 ---
@@ -51,7 +51,7 @@ With Docker Compose, this can be passed through the `environment` section or thr
 |---|---|---|---|
 | `wav2vec2_lm` | `Wav2Vec2ForCTC` | KenLM-rescored CTC | More fluent output when RAM/disk budget is available |
 | `wav2vec2` | `Wav2Vec2ForCTC` | Greedy CTC | Lighter CPU-friendly deployment and testing |
-| `wav2vec2_bert` | `Wav2Vec2BertForCTC` | Greedy CTC | W2V-BERT CTC checkpoints |
+| `w2v_bert` | `Wav2Vec2BertForCTC` | Greedy CTC | W2V-BERT CTC checkpoints |
 | `whisper` | `WhisperForConditionalGeneration` / Transformers ASR pipeline | Encoder-decoder generation | Whisper ASR models, especially on GPU |
 
 ---
@@ -64,7 +64,7 @@ The following entries are intended for the current API configuration.
 |---|---|---|---|
 | `nos_asr_gl` | `proxectonos/Nos_ASR-wav2vec2-large-xlsr-53-gl-with-lm` | `wav2vec2_lm` | Wav2Vec2 XLSR-53 large with bundled KenLM language model. Heavier, but LM-rescored. |
 | `nos_asr_gl_300m` | `proxectonos/Nos_ASR-wav2vec2-xls-r-300m-gl` | `wav2vec2` | Wav2Vec2 XLS-R 300M, greedy CTC. Lighter and suitable for local CPU tests. |
-| `w2v_bert_2_gl` | `proxectonos/w2v-bert-2.0-gl` | `wav2vec2_bert` | W2V-BERT CTC|
+| `w2v_bert_2_gl` | `proxectonos/w2v-bert-2.0-gl` | `w2v_bert` | W2V-BERT CTC|
 | `whisper_large_v3_turbo_gl_v1` | `proxectonos/whisper-large-v3-turbo-gl-v1.0` | `whisper` | Whisper Large-v3-Turbo fine-tuned for Galician ASR. Recommended on GPU. |
 
 ---
@@ -106,7 +106,7 @@ The `default` flag controls which model is used when the request specifies only 
     {
       "model_id": "w2v_bert_2_gl",
       "lang": "gl",
-      "model_type": "wav2vec2_bert",
+      "model_type": "w2v_bert",
       "hf_repo": "proxectonos/w2v-bert-2.0-gl",
       "sampling_rate": 16000,
       "load": false,
@@ -149,7 +149,7 @@ Model entry fields:
 
 - `model_id`: public identifier used in API calls and as the local model cache subdirectory.
 - `lang`: language code for the model. It must match a key in `languages`.
-- `model_type`: backend identifier. Supported values are `wav2vec2_lm`, `wav2vec2`, `wav2vec2_bert` and `whisper`.
+- `model_type`: backend identifier. Supported values are `wav2vec2_lm`, `wav2vec2`, `w2v_bert` and `whisper`.
 - `hf_repo`: Hugging Face repository used to download the model and processor.
 - `sampling_rate`: sampling rate expected by the model. Incoming audio is converted to this rate.
 - `load`: set to `true` to load the model at API startup.
