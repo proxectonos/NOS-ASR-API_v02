@@ -167,7 +167,7 @@ def _load_wav2vec2(
     return record
 
 
-def _build_wav2vec2_bert_processor(
+def _build_w2v_bert_processor(
     *,
     hf_repo: str,
     cache_dir: str,
@@ -196,7 +196,7 @@ def _build_wav2vec2_bert_processor(
     )
 
 
-def _load_wav2vec2_bert(
+def _load_w2v_bert(
     *,
     entry: dict,
     config_data: dict,
@@ -207,7 +207,7 @@ def _load_wav2vec2_bert(
     lang = entry["lang"]
     hf_repo = entry["hf_repo"]
     sampling_rate = entry.get("sampling_rate", 16000)
-    model_type = entry.get("model_type", "wav2vec2_bert")
+    model_type = entry.get("model_type", "w2v_bert")
     options = entry.get("options", {})
 
     try:
@@ -221,7 +221,7 @@ def _load_wav2vec2_bert(
             f"for {model_id} ({e}); building it from vocab.json and "
             "facebook/w2v-bert-2.0 feature extractor"
         )
-        processor = _build_wav2vec2_bert_processor(
+        processor = _build_w2v_bert_processor(
             hf_repo=hf_repo,
             cache_dir=cache_dir,
         )
@@ -367,8 +367,8 @@ def load_models(config_data: dict, models_root: str, use_cuda: bool):
                 device=device,
             )
 
-        elif model_type == "wav2vec2_bert":
-            record = _load_wav2vec2_bert(
+        elif model_type == "w2v_bert":
+            record = _load_w2v_bert(
                 entry=entry,
                 config_data=config_data,
                 cache_dir=cache_dir,
@@ -467,7 +467,7 @@ def _transcribe_ctc_single(loaded_model: dict, audio: np.ndarray) -> str:
 def _default_ctc_chunk_length_s(loaded_model: dict) -> Optional[float]:
     model_type = loaded_model.get("model_type")
 
-    if model_type == "wav2vec2_bert":
+    if model_type == "w2v_bert":
         return 30.0
 
     return None
