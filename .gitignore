@@ -1,71 +1,33 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-.Python
-.venv/
-venv/
-env/
-*.egg
+config.json
 
-# Build / packaging
-build/
-dist/
-*.whl
+models/
+.hf_cache/
+*.cache/
 
-# OS / IDE
-.DS_Store
-Thumbs.db
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Logs
-*.log
-logs/
-
-# Test / coverage
-.coverage
-.coverage.*
-htmlcov/
-.pytest_cache/
-.tox/
-.mypy_cache/
-.ruff_cache/
-
-# Local secrets / env
-.env
-.env.*
-!.env.example
-
-# Model artifacts and HF cache (large binaries — do not commit)
-models/.hf_cache/
-models/*/
-!models/.gitkeep
-
-# Local test fixtures (audio, transcripts)
-samples/audio/
-samples/output/
 *.wav
-*.flac
 *.mp3
+*.flac
 *.ogg
 *.m4a
 *.webm
-!samples/*.wav
-!samples/*.mp3
+samples/
+chunks/
+outputs/
 
-# Docker
-*.pid
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
 
-# Claude / local tooling state
-.claude/
-CLAUDE.md
-TASKS.local.md
+*.log
+tmp/
+temp/
 
-# Internal planning notes (not for the public repo)
-notas_proxecto.md
+.DS_Store
+.vscode/
+.idea/
 
-# Documentation
-docs/
+*.bak
+README_tldr.md

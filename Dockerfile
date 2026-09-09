@@ -1,5 +1,5 @@
-# Dockerfile for running Galician ASR (wav2vec2 + KenLM)
-# Model: proxectonos/Nos_ASR-wav2vec2-large-xlsr-53-gl-with-lm (HuggingFace)
+# Dockerfile for the NÓS Galician ASR API.
+# Supports Wav2Vec2, Wav2Vec2+LM, W2V-BERT and Whisper backends.
 
 FROM python:3.10-slim-bookworm
 
@@ -30,3 +30,5 @@ WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/app/models/.hf_cache
+
+CMD ["gunicorn", "server:app", "-b", ":8000", "--workers", "1", "--threads", "1", "--worker-class", "gthread", "--timeout", "3600"]

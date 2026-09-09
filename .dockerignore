@@ -1,14 +1,19 @@
 models/
 models/.hf_cache/
 .hf_cache/
+config.json
 
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
 
 .git/
+.gitignore
+
 .venv/
 venv/
-asr/
+env/
 
 *.wav
 *.mp3
@@ -16,8 +21,8 @@ asr/
 *.ogg
 *.m4a
 *.webm
-*.mp4
 
+samples/
 chunks/
 outputs/
 tmp/
