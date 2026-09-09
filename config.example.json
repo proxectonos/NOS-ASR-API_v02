@@ -43,7 +43,7 @@
     {
       "model_id": "w2v_bert_2_gl",
       "lang": "gl",
-      "model_type": "wav2vec2_bert",
+      "model_type": "w2v_bert",
       "hf_repo": "proxectonos/w2v-bert-2.0-gl",
       "sampling_rate": 16000,
       "load": false,
