@@ -5,12 +5,11 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 import torch
-from huggingface_hub import hf_hub_download
 from transformers import (
-    SeamlessM4TFeatureExtractor,
     Wav2Vec2BertForCTC,
     Wav2Vec2BertProcessor,
     Wav2Vec2CTCTokenizer,
+    Wav2Vec2FeatureExtractor,
     Wav2Vec2ForCTC,
     Wav2Vec2Processor,
     Wav2Vec2ProcessorWithLM,
@@ -73,6 +72,60 @@ def _base_model_record(
     }
 
 
+def _log_tokenizer_diagnostics(model_id: str, tokenizer: Any) -> None:
+    print(f"[loader] {model_id} tokenizer class: {tokenizer.__class__.__name__}")
+    print(
+        f"[loader] {model_id} word_delimiter_token: "
+        f"{getattr(tokenizer, 'word_delimiter_token', None)!r}"
+    )
+    print(f"[loader] {model_id} unk_token: {getattr(tokenizer, 'unk_token', None)!r}")
+    print(f"[loader] {model_id} pad_token: {getattr(tokenizer, 'pad_token', None)!r}")
+
+    try:
+        vocab = tokenizer.get_vocab()
+    except Exception as e:
+        print(f"[loader] {model_id} tokenizer vocab diagnostics unavailable: {e}")
+        return
+
+    selected = {}
+    for token in [
+        " ",
+        "|",
+        "[UNK]",
+        "[PAD]",
+        "l",
+        "r",
+        "c",
+        "g",
+        "u",
+        "e",
+        "i",
+        "ll",
+        "rr",
+        "cc",
+        "gue",
+        "gui",
+    ]:
+        if token in vocab:
+            selected[token] = vocab[token]
+
+    print(f"[loader] {model_id} tokenizer vocab size: {len(vocab)}")
+    print(f"[loader] {model_id} selected vocab entries: {selected}")
+
+
+def _store_processor_parts(record: dict, processor: Any) -> None:
+    """
+    Store tokenizer and feature extractor explicitly when available.
+
+    This makes CTC pipeline emulation independent from processor.batch_decode().
+    """
+    if hasattr(processor, "tokenizer"):
+        record["tokenizer"] = processor.tokenizer
+
+    if hasattr(processor, "feature_extractor"):
+        record["feature_extractor"] = processor.feature_extractor
+
+
 def _load_wav2vec2_lm(
     *,
     entry: dict,
@@ -80,6 +133,12 @@ def _load_wav2vec2_lm(
     cache_dir: str,
     device: torch.device,
 ) -> dict:
+    """
+    Load Wav2Vec2 with LM.
+
+    This backend intentionally keeps the existing LM decoder path. Do not route
+    Wav2Vec2+LM through the emulated plain-CTC pipeline.
+    """
     model_id = entry["model_id"]
     lang = entry["lang"]
     hf_repo = entry["hf_repo"]
@@ -123,6 +182,7 @@ def _load_wav2vec2_lm(
     )
     record["processor"] = processor
     record["model"] = model
+    _store_processor_parts(record, processor)
     return record
 
 
@@ -133,17 +193,62 @@ def _load_wav2vec2(
     cache_dir: str,
     device: torch.device,
 ) -> dict:
+    """
+    Load plain Wav2Vec2 CTC.
+
+    If options.word_delimiter_token is provided, build the tokenizer explicitly.
+    This is useful for the Galician XLS-R 300M model, where the production/demo
+    setup uses word_delimiter_token=" " rather than the added "|" token.
+
+    Inference for this backend uses the emulated HF CTC pipeline path.
+    """
     model_id = entry["model_id"]
     lang = entry["lang"]
     hf_repo = entry["hf_repo"]
     sampling_rate = entry.get("sampling_rate", 16000)
     model_type = entry.get("model_type", "wav2vec2")
-    options = entry.get("options", {})
+    options = entry.get("options", {}) or {}
 
-    processor = Wav2Vec2Processor.from_pretrained(
-        hf_repo,
-        cache_dir=cache_dir,
-    )
+    word_delimiter_token = options.get("word_delimiter_token")
+
+    if word_delimiter_token is not None:
+        print(
+            f"[loader] loading {model_id} Wav2Vec2 tokenizer explicitly "
+            f"with word_delimiter_token={word_delimiter_token!r}"
+        )
+        tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(
+            hf_repo,
+            cache_dir=cache_dir,
+            unk_token="[UNK]",
+            pad_token="[PAD]",
+            word_delimiter_token=word_delimiter_token,
+        )
+
+        feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(
+            hf_repo,
+            cache_dir=cache_dir,
+        )
+
+        processor = Wav2Vec2Processor(
+            feature_extractor=feature_extractor,
+            tokenizer=tokenizer,
+        )
+
+        # Keep the demo behaviour when hf_repo is a local writable directory.
+        # If hf_repo is a Hub id or not writable, this is not required and should
+        # not block loading.
+        try:
+            if os.path.isdir(hf_repo) and os.access(hf_repo, os.W_OK):
+                tokenizer.save_pretrained(hf_repo)
+                print(f"[loader] saved explicit tokenizer into {hf_repo}")
+        except Exception as e:
+            print(f"[loader] could not save explicit tokenizer into {hf_repo}: {e}")
+
+    else:
+        processor = Wav2Vec2Processor.from_pretrained(
+            hf_repo,
+            cache_dir=cache_dir,
+        )
 
     model = Wav2Vec2ForCTC.from_pretrained(
         hf_repo,
@@ -151,7 +256,7 @@ def _load_wav2vec2(
     ).to(device).eval()
 
     record = _base_model_record(
-        backend="ctc",
+        backend="ctc_pipeline_emulated",
         model_id=model_id,
         model_type=model_type,
         lang=lang,
@@ -164,36 +269,18 @@ def _load_wav2vec2(
     )
     record["processor"] = processor
     record["model"] = model
+    _store_processor_parts(record, processor)
+
+    if "tokenizer" in record:
+        _log_tokenizer_diagnostics(model_id, record["tokenizer"])
+
+    print(
+        f"[loader] {model_id} backend=ctc_pipeline_emulated "
+        f"inputs_to_logits_ratio={_model_align_to(model)} "
+        f"model_vocab_size={getattr(model.config, 'vocab_size', None)}"
+    )
+
     return record
-
-
-def _build_w2v_bert_processor(
-    *,
-    hf_repo: str,
-    cache_dir: str,
-) -> Wav2Vec2BertProcessor:
-    vocab_file = hf_hub_download(
-        repo_id=hf_repo,
-        filename="vocab.json",
-        cache_dir=cache_dir,
-    )
-
-    tokenizer = Wav2Vec2CTCTokenizer(
-        vocab_file=vocab_file,
-        unk_token="[UNK]",
-        pad_token="[PAD]",
-        word_delimiter_token="|",
-    )
-
-    feature_extractor = SeamlessM4TFeatureExtractor.from_pretrained(
-        "facebook/w2v-bert-2.0",
-        cache_dir=cache_dir,
-    )
-
-    return Wav2Vec2BertProcessor(
-        feature_extractor=feature_extractor,
-        tokenizer=tokenizer,
-    )
 
 
 def _load_w2v_bert(
@@ -203,28 +290,26 @@ def _load_w2v_bert(
     cache_dir: str,
     device: torch.device,
 ) -> dict:
+    """
+    Load W2V-BERT using only the complete processor available with the model.
+
+    No fallback processor is built here. If the model package does not contain a
+    complete Wav2Vec2BertProcessor, loading fails intentionally instead of
+    silently using a different tokenizer/feature-extractor combination.
+
+    Inference for this backend uses the emulated HF CTC pipeline path.
+    """
     model_id = entry["model_id"]
     lang = entry["lang"]
     hf_repo = entry["hf_repo"]
     sampling_rate = entry.get("sampling_rate", 16000)
     model_type = entry.get("model_type", "w2v_bert")
-    options = entry.get("options", {})
+    options = entry.get("options", {}) or {}
 
-    try:
-        processor = Wav2Vec2BertProcessor.from_pretrained(
-            hf_repo,
-            cache_dir=cache_dir,
-        )
-    except Exception as e:
-        print(
-            f"[loader] Wav2Vec2BertProcessor could not be loaded directly "
-            f"for {model_id} ({e}); building it from vocab.json and "
-            "facebook/w2v-bert-2.0 feature extractor"
-        )
-        processor = _build_w2v_bert_processor(
-            hf_repo=hf_repo,
-            cache_dir=cache_dir,
-        )
+    processor = Wav2Vec2BertProcessor.from_pretrained(
+        hf_repo,
+        cache_dir=cache_dir,
+    )
 
     model = Wav2Vec2BertForCTC.from_pretrained(
         hf_repo,
@@ -232,7 +317,7 @@ def _load_w2v_bert(
     ).to(device).eval()
 
     record = _base_model_record(
-        backend="ctc",
+        backend="ctc_pipeline_emulated",
         model_id=model_id,
         model_type=model_type,
         lang=lang,
@@ -245,6 +330,17 @@ def _load_w2v_bert(
     )
     record["processor"] = processor
     record["model"] = model
+    _store_processor_parts(record, processor)
+
+    if "tokenizer" in record:
+        _log_tokenizer_diagnostics(model_id, record["tokenizer"])
+
+    print(
+        f"[loader] {model_id} backend=ctc_pipeline_emulated "
+        f"inputs_to_logits_ratio={_model_align_to(model)} "
+        f"model_vocab_size={getattr(model.config, 'vocab_size', None)}"
+    )
+
     return record
 
 
@@ -282,7 +378,7 @@ def _load_whisper(
     hf_repo = entry["hf_repo"]
     sampling_rate = entry.get("sampling_rate", 16000)
     model_type = entry.get("model_type", "whisper")
-    options = entry.get("options", {})
+    options = entry.get("options", {}) or {}
 
     language = options.get("language", "galician")
     task = options.get("task", "transcribe")
@@ -297,11 +393,18 @@ def _load_whisper(
     use_fp16 = _whisper_use_fp16(device, options)
     torch_dtype = torch.float16 if use_fp16 else torch.float32
 
-    model = WhisperForConditionalGeneration.from_pretrained(
-        hf_repo,
-        cache_dir=cache_dir,
-        torch_dtype=torch_dtype,
-    ).to(device).eval()
+    try:
+        model = WhisperForConditionalGeneration.from_pretrained(
+            hf_repo,
+            cache_dir=cache_dir,
+            dtype=torch_dtype,
+        ).to(device).eval()
+    except TypeError:
+        model = WhisperForConditionalGeneration.from_pretrained(
+            hf_repo,
+            cache_dir=cache_dir,
+            torch_dtype=torch_dtype,
+        ).to(device).eval()
 
     record = _base_model_record(
         backend="whisper",
@@ -319,6 +422,8 @@ def _load_whisper(
     record["model"] = model
 
     # Used only when stride_length_s > 0.
+    # Note: in environments with broken TorchCodec, Whisper pipeline chunking may
+    # fail if the installed Transformers version touches TorchCodec internally.
     record["pipeline"] = pipeline(
         task="automatic-speech-recognition",
         model=model,
@@ -367,7 +472,7 @@ def load_models(config_data: dict, models_root: str, use_cuda: bool):
                 device=device,
             )
 
-        elif model_type == "w2v_bert":
+        elif model_type in {"w2v_bert", "wav2vec2_bert"}:
             record = _load_w2v_bert(
                 entry=entry,
                 config_data=config_data,
@@ -396,11 +501,99 @@ def load_models(config_data: dict, models_root: str, use_cuda: bool):
     return loaded, defaults_by_lang
 
 
+# =============================================================================
+# Shared tensor and CTC helpers
+# =============================================================================
+
 def _move_inputs_to_device(inputs, device: torch.device) -> dict:
     return {
         key: value.to(device) if hasattr(value, "to") else value
         for key, value in inputs.items()
     }
+
+
+def _model_align_to(model) -> int:
+    return int(getattr(model.config, "inputs_to_logits_ratio", 1) or 1)
+
+
+def _rescale_stride_one(stride, ratio: float):
+    """
+    Convert an audio-sample stride tuple into token/logit-frame units.
+
+    This mirrors the relevant stride rescaling used by the HF ASR pipeline for
+    plain CTC models.
+    """
+    input_n, left, right = stride
+    token_n = int(round(input_n * ratio))
+    left_n = int(round(left / input_n * token_n)) if input_n else 0
+    right_n = int(round(right / input_n * token_n)) if input_n else 0
+    return token_n, left_n, right_n
+
+
+def _ctc_get_tokenizer(loaded_model: dict):
+    if loaded_model.get("tokenizer") is not None:
+        return loaded_model["tokenizer"]
+
+    processor = loaded_model.get("processor")
+    if processor is not None and hasattr(processor, "tokenizer"):
+        return processor.tokenizer
+
+    raise RuntimeError("CTC tokenizer not available in loaded model record.")
+
+
+def _ctc_get_feature_extractor(loaded_model: dict):
+    if loaded_model.get("feature_extractor") is not None:
+        return loaded_model["feature_extractor"]
+
+    processor = loaded_model.get("processor")
+    if processor is not None and hasattr(processor, "feature_extractor"):
+        return processor.feature_extractor
+
+    if processor is not None:
+        return processor
+
+    raise RuntimeError("CTC feature extractor not available in loaded model record.")
+
+
+def _ctc_forward_token_ids(loaded_model: dict, audio: np.ndarray) -> torch.Tensor:
+    """
+    Forward one CTC chunk and return greedy token IDs.
+
+    This avoids processor.batch_decode() during chunk recombination. The final
+    decode happens once after overlap has been cropped in token-frame space.
+    """
+    feature_extractor = _ctc_get_feature_extractor(loaded_model)
+    model = loaded_model["model"]
+    device = loaded_model["device"]
+    sampling_rate = loaded_model["sampling_rate"]
+
+    audio = np.asarray(audio, dtype=np.float32).reshape(-1)
+
+    try:
+        inputs = feature_extractor(
+            audio,
+            sampling_rate=sampling_rate,
+            return_tensors="pt",
+            return_attention_mask=True,
+        )
+    except TypeError:
+        inputs = feature_extractor(
+            audio,
+            sampling_rate=sampling_rate,
+            return_tensors="pt",
+        )
+
+    inputs = _move_inputs_to_device(inputs, device)
+
+    with torch.inference_mode():
+        token_ids = model(**inputs).logits.argmax(dim=-1).detach().cpu()
+
+    del inputs
+
+    if isinstance(device, torch.device) and device.type == "cuda":
+        torch.cuda.empty_cache()
+
+    return token_ids
 
 
 def _decode_ctc_logits_with_lm(processor, logits: torch.Tensor) -> str:
@@ -430,6 +623,12 @@ def _decode_ctc_greedy(processor, logits: torch.Tensor) -> str:
 
 
 def _transcribe_ctc_single(loaded_model: dict, audio: np.ndarray) -> str:
+    """
+    Legacy single-shot CTC path.
+
+    This remains necessary for Wav2Vec2+LM and for any future CTC backend that
+    should not use the plain CTC pipeline emulation.
+    """
     processor = loaded_model["processor"]
     model = loaded_model["model"]
     device = loaded_model["device"]
@@ -458,7 +657,7 @@ def _transcribe_ctc_single(loaded_model: dict, audio: np.ndarray) -> str:
 
     del inputs, logits
 
-    if device.type == "cuda":
+    if isinstance(device, torch.device) and device.type == "cuda":
         torch.cuda.empty_cache()
 
     return text.strip()
@@ -467,7 +666,7 @@ def _transcribe_ctc_single(loaded_model: dict, audio: np.ndarray) -> str:
 def _default_ctc_chunk_length_s(loaded_model: dict) -> Optional[float]:
     model_type = loaded_model.get("model_type")
 
-    if model_type == "w2v_bert":
+    if model_type in {"w2v_bert", "wav2vec2_bert"}:
         return 30.0
 
     return None
@@ -478,6 +677,12 @@ def _transcribe_ctc_chunked(
     audio: np.ndarray,
     chunk_length_s: float,
 ) -> str:
+    """
+    Legacy text-level chunking.
+
+    This is kept for Wav2Vec2+LM fallback scenarios. Plain wav2vec2 and
+    W2V-BERT should use _transcribe_ctc_pipeline_emulated() instead.
+    """
     sampling_rate = loaded_model["sampling_rate"]
     model_id = loaded_model["model_id"]
 
@@ -520,12 +725,130 @@ def _transcribe_ctc_chunked(
     return " ".join(texts).strip()
 
 
+def _transcribe_ctc_pipeline_emulated(loaded_model: dict, audio: np.ndarray) -> str:
+    """
+    Emulate Hugging Face AutomaticSpeechRecognitionPipeline for plain CTC models.
+
+    """
+    model = loaded_model["model"]
+    tokenizer = _ctc_get_tokenizer(loaded_model)
+    sampling_rate = int(loaded_model.get("sampling_rate", 16000))
+    options = loaded_model.get("options", {}) or {}
+
+    audio = np.asarray(audio, dtype=np.float32).reshape(-1)
+
+    chunk_length_s = float(options.get("chunk_length_s", 30.0))
+    stride_left_s = float(options.get("stride_left_s", 6.0))
+    stride_right_s = float(options.get("stride_right_s", 3.0))
+    skip_special_tokens = bool(options.get("decode_skip_special_tokens", False))
+
+    align_to = _model_align_to(model)
+
+    chunk_len = int(round(chunk_length_s * sampling_rate / align_to) * align_to)
+    stride_left = int(round(stride_left_s * sampling_rate / align_to) * align_to)
+    stride_right = int(round(stride_right_s * sampling_rate / align_to) * align_to)
+
+    if chunk_len <= 0:
+        raise ValueError(f"Invalid chunk_length_s: {chunk_length_s}")
+
+    if chunk_len < stride_left + stride_right:
+        raise ValueError(
+            "Chunk length must be greater than stride length: "
+            f"chunk={chunk_length_s}, stride_left={stride_left_s}, "
+            f"stride_right={stride_right_s}"
+        )
+
+    step = chunk_len - stride_left - stride_right
+    inputs_len = audio.shape[0]
+
+    print(
+        f"[transcribe] Emulated HF CTC pipeline {loaded_model.get('model_id')}: "
+        f"{inputs_len / float(sampling_rate):.2f}s audio, "
+        f"{chunk_length_s:.2f}s chunks, "
+        f"stride=({stride_left_s:.2f}s,{stride_right_s:.2f}s), "
+        f"align_to={align_to}, "
+        f"decode_skip_special_tokens={skip_special_tokens}"
+    )
+
+    final_items = []
+    total_chunks = 0
+
+    for chunk_start_idx in range(0, inputs_len, step):
+        chunk_end_idx = chunk_start_idx + chunk_len
+        chunk = audio[chunk_start_idx:chunk_end_idx]
+
+        if chunk.shape[0] == 0:
+            continue
+
+        is_first = chunk_start_idx == 0
+        is_last = chunk_end_idx >= inputs_len
+
+        current_stride_left = 0 if is_first else stride_left
+        current_stride_right = 0 if is_last else stride_right
+
+        total_chunks += 1
+
+        print(
+            f"[transcribe] {loaded_model.get('model_id')}: "
+            f"emulated chunk {total_chunks} "
+            f"start={chunk_start_idx / float(sampling_rate):.2f}s "
+            f"end={min(chunk_end_idx, inputs_len) / float(sampling_rate):.2f}s "
+            f"chunk={chunk.shape[0] / float(sampling_rate):.2f}s"
+        )
+
+        token_ids = _ctc_forward_token_ids(loaded_model, chunk)
+
+        ratio = 1.0 / float(align_to)
+        total_n, left_n, right_n = _rescale_stride_one(
+            (
+                int(chunk.shape[0]),
+                int(current_stride_left),
+                int(current_stride_right),
+            ),
+            ratio,
+        )
+
+        items = token_ids.numpy()
+        right_boundary = max(left_n, total_n - right_n)
+        cropped = items[:, left_n:right_boundary]
+
+        if cropped.shape[1] > 0:
+            final_items.append(cropped)
+
+        del token_ids
+
+        if is_last:
+            break
+
+    if not final_items:
+        return ""
+
+    merged = np.concatenate(final_items, axis=1).squeeze(0)
+
+    text = tokenizer.decode(
+        merged,
+        skip_special_tokens=skip_special_tokens,
+    )
+
+    print(
+        f"[transcribe] Emulated HF CTC pipeline decoded "
+        f"{len(final_items)} chunks into {merged.shape[0]} token frames."
+    )
+
+    return text.strip()
+
+
 def _transcribe_ctc(loaded_model: dict, audio: np.ndarray) -> str:
     sampling_rate = loaded_model["sampling_rate"]
-    options = loaded_model.get("options", {})
+    options = loaded_model.get("options", {}) or {}
+    backend = loaded_model.get("backend", "ctc")
 
     audio = np.asarray(audio, dtype=np.float32).reshape(-1)
     duration_s = len(audio) / float(sampling_rate)
+
+    # Do not use plain CTC emulation for LM decoding.
+    if not loaded_model.get("has_lm", False) and backend == "ctc_pipeline_emulated":
+        return _transcribe_ctc_pipeline_emulated(loaded_model, audio)
 
     chunk_length_s = options.get(
         "chunk_length_s",
@@ -542,9 +865,13 @@ def _transcribe_ctc(loaded_model: dict, audio: np.ndarray) -> str:
     return _transcribe_ctc_single(loaded_model, audio)
 
 
+# =============================================================================
+# Whisper helpers
+# =============================================================================
+
 def _whisper_generate_kwargs(loaded_model: dict) -> dict:
     processor = loaded_model["processor"]
-    options = loaded_model.get("options", {})
+    options = loaded_model.get("options", {}) or {}
 
     generate_kwargs = {}
 
@@ -574,7 +901,7 @@ def _whisper_generate_kwargs(loaded_model: dict) -> dict:
 
 
 def _whisper_pipeline_generate_kwargs(loaded_model: dict) -> dict:
-    options = loaded_model.get("options", {})
+    options = loaded_model.get("options", {}) or {}
 
     generate_kwargs = {}
 
@@ -715,7 +1042,7 @@ def _transcribe_whisper_pipeline_chunked(
 
     sampling_rate = loaded_model["sampling_rate"]
     model_id = loaded_model["model_id"]
-    options = loaded_model.get("options", {})
+    options = loaded_model.get("options", {}) or {}
 
     audio = np.asarray(audio, dtype=np.float32).reshape(-1)
 
@@ -772,7 +1099,7 @@ def _transcribe_whisper_pipeline_chunked(
 
 def _transcribe_whisper(loaded_model: dict, audio: np.ndarray) -> str:
     sampling_rate = loaded_model["sampling_rate"]
-    options = loaded_model.get("options", {})
+    options = loaded_model.get("options", {}) or {}
 
     audio = np.asarray(audio, dtype=np.float32).reshape(-1)
     duration_s = len(audio) / float(sampling_rate)
@@ -798,16 +1125,21 @@ def _transcribe_whisper(loaded_model: dict, audio: np.ndarray) -> str:
     return _transcribe_whisper_single(loaded_model, audio)
 
 
+# =============================================================================
+# Public transcription dispatch
+# =============================================================================
+
 def _transcribe_unlocked(loaded_model: dict, audio: np.ndarray) -> str:
     backend = loaded_model.get("backend", "ctc")
 
-    if backend == "ctc":
+    if backend in {"ctc", "ctc_pipeline_emulated"}:
         return _transcribe_ctc(loaded_model, audio)
 
     if backend == "whisper":
         return _transcribe_whisper(loaded_model, audio)
 
     raise ValueError(f"Unsupported backend: {backend}")
+
 
 def _postprocess_text(loaded_model: dict, text: str) -> str:
     options = loaded_model.get("options", {}) or {}
@@ -819,6 +1151,7 @@ def _postprocess_text(loaded_model: dict, text: str) -> str:
         text = text.replace("¡", "")
 
     return text.strip()
+
 
 def transcribe(loaded_model: dict, audio: np.ndarray) -> str:
     device = loaded_model.get("device")
