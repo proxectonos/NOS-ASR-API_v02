@@ -19,7 +19,7 @@ services:
     environment:
       - ASR_API_CONFIG=/app/config.json
       - MODELS_ROOT=/app/models
-      - USE_CUDA==0  # CPU: 0 | GPU: 1
+      - USE_CUDA=0  # CPU: 0 | GPU: 1
       - HF_HOME=/app/models/.hf_cache
       - MAX_AUDIO_MB=500
     
