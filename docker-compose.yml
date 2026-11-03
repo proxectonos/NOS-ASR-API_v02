@@ -19,19 +19,25 @@ services:
     environment:
       - ASR_API_CONFIG=/app/config.json
       - MODELS_ROOT=/app/models
-      - USE_CUDA=1  #1 to enable GPU inference
+      - USE_CUDA==0  # CPU: 0 | GPU: 1
       - HF_HOME=/app/models/.hf_cache
       - MAX_AUDIO_MB=500
-    #Remove comment below to enable GPU inference
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1 #set to "all" to use all GPUs
-              capabilities: [gpu]
-    #Remove comment above to enable GPU inference
-
+    
+    # CPU MODE (default):
+    # Keep USE_CUDA=0 and leave the entire block below commented out.
+    #
+    # NVIDIA GPU MODE:
+    # Requires a compatible NVIDIA GPU and Docker GPU support.
+    # 1. Change USE_CUDA=0 above to USE_CUDA=1.
+    # 2. Uncomment ALL lines of the deploy block below.   
+    #deploy:
+    #  resources:
+    #    reservations:
+    #      devices:
+    #        - driver: nvidia
+    #          count: 1 #set to "all" to use all GPUs
+    #          capabilities: [gpu]
+   
     # networks:
     #   - api-network
 
