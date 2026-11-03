@@ -1144,6 +1144,11 @@ def _transcribe_unlocked(loaded_model: dict, audio: np.ndarray) -> str:
 def _postprocess_text(loaded_model: dict, text: str) -> str:
     options = loaded_model.get("options", {}) or {}
 
+    # W2V-BERT-specific corrections
+    if loaded_model.get("model_type") in {"w2v_bert", "wav2vec2_bert"}:
+        text = text.replace("g[UNK]", "gü")
+        text = text.replace("[UNK]non", "non")
+
     if options.get("remove_inverted_question_marks", False):
         text = text.replace("¿", "")
 
