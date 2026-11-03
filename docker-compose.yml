@@ -21,7 +21,7 @@ services:
       - MODELS_ROOT=/app/models
       - USE_CUDA=0  # CPU: 0 | GPU: 1
       - HF_HOME=/app/models/.hf_cache
-      - MAX_AUDIO_MB=500
+      - MAX_AUDIO_MB=1000
     
     # CPU MODE (default):
     # Keep USE_CUDA=0 and leave the entire block below commented out.
